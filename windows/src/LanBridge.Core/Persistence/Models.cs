@@ -25,6 +25,24 @@ public sealed class AppSettings : IRuntimeSettings
     public bool FilterSensitive { get; set; } = true;
     public bool RunAtStartup { get; set; }
     public long MaxFileBytes { get; set; } = ProtocolConstants.DefaultMaxFileBytes;
+    public string SelectedPhoneId { get; set; } = "";
+    public string HotkeySend { get; set; } = "Ctrl+Alt+V";
+    public string HotkeySidebar { get; set; } = "Ctrl+Alt+L";
+    public bool SidebarPinned { get; set; }
+    public Dictionary<string, bool> PhoneClipboardSync { get; set; } = new(StringComparer.Ordinal);
+
+    public bool ClipboardEnabledFor(string deviceId)
+    {
+        if (string.IsNullOrEmpty(deviceId)) return ClipboardSyncEnabled;
+        if (PhoneClipboardSync != null && PhoneClipboardSync.TryGetValue(deviceId, out var value)) return value;
+        return ClipboardSyncEnabled;
+    }
+
+    public void SetClipboardEnabled(string deviceId, bool enabled)
+    {
+        PhoneClipboardSync ??= new Dictionary<string, bool>(StringComparer.Ordinal);
+        PhoneClipboardSync[deviceId] = enabled;
+    }
 
     public AppSettings Clone() => new()
     {
@@ -38,7 +56,14 @@ public sealed class AppSettings : IRuntimeSettings
         SaveTextHistory = SaveTextHistory,
         FilterSensitive = FilterSensitive,
         RunAtStartup = RunAtStartup,
-        MaxFileBytes = MaxFileBytes
+        MaxFileBytes = MaxFileBytes,
+        SelectedPhoneId = SelectedPhoneId,
+        HotkeySend = string.IsNullOrWhiteSpace(HotkeySend) ? "Ctrl+Alt+V" : HotkeySend,
+        HotkeySidebar = string.IsNullOrWhiteSpace(HotkeySidebar) ? "Ctrl+Alt+L" : HotkeySidebar,
+        SidebarPinned = SidebarPinned,
+        PhoneClipboardSync = PhoneClipboardSync == null
+            ? new Dictionary<string, bool>(StringComparer.Ordinal)
+            : new Dictionary<string, bool>(PhoneClipboardSync, StringComparer.Ordinal)
     };
 }
 

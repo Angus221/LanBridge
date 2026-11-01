@@ -46,6 +46,14 @@
             </intent-filter>
         </activity>
         <activity
+            android:name=".share.ClipboardSendActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:launchMode="singleInstance"
+            android:taskAffinity="app.lanbridge.phone.clipboard"
+            android:theme="@style/Theme.LanBridge.Clipboard" />
+        <activity
             android:name=".qr.QrScanActivity"
             android:exported="false"
             android:hardwareAccelerated="true"
@@ -58,7 +66,7 @@
             android:name=".tile.ClipboardTileService"
             android:exported="true"
             android:icon="@drawable/ic_launcher"
-            android:label="@string/send_to_pc"
+            android:label="@string/send_clipboard"
             android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
             <intent-filter>
                 <action android:name="android.service.quicksettings.action.QS_TILE" />

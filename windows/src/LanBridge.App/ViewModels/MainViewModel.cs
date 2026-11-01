@@ -32,6 +32,11 @@ public partial class MainViewModel : ObservableObject
         SaveTextHistory = host.Settings.SaveTextHistory;
         FilterSensitive = host.Settings.FilterSensitive;
         RunAtStartup = host.Settings.RunAtStartup;
+        SelectedPhoneId = host.Settings.SelectedPhoneId;
+        HotkeySend = string.IsNullOrWhiteSpace(host.Settings.HotkeySend) ? HotkeyParser.DefaultSend : host.Settings.HotkeySend;
+        HotkeySidebar = string.IsNullOrWhiteSpace(host.Settings.HotkeySidebar) ? HotkeyParser.DefaultSidebar : host.Settings.HotkeySidebar;
+        SidebarPinned = host.Settings.SidebarPinned;
+        HotkeyStatus = HotkeySend + " 发送剪贴板 · " + HotkeySidebar + " 打开侧栏";
         _clock = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         _clock.Tick += (_, _) => TickPairing();
         host.FilesReady += _ => Application.Current.Dispatcher.InvokeAsync(SendQueuedAsync);
@@ -90,8 +95,14 @@ public partial class MainViewModel : ObservableObject
         }
         MaybeExplainFirewall();
         _ready = true;
+        if (!string.IsNullOrEmpty(SelectedPhoneId) && _host.Settings.SelectedPhoneId != SelectedPhoneId)
+        {
+            _host.Settings.SelectedPhoneId = SelectedPhoneId;
+            try { _host.SaveSettings(); } catch (Exception) { }
+        }
         SendFileCommand.NotifyCanExecuteChanged();
         SendClipboardCommand.NotifyCanExecuteChanged();
+        HotkeysChanged?.Invoke();
         await SendQueuedAsync();
     }
 
@@ -139,7 +150,7 @@ public partial class MainViewModel : ObservableObject
         await SendPathsAsync(dialog.FileNames);
     }
 
-    [RelayCommand(CanExecute = nameof(CanSend))]
+    [RelayCommand]
     private async Task SendClipboardAsync()
     {
         var server = _host.Server;
@@ -171,11 +182,20 @@ public partial class MainViewModel : ObservableObject
                 MessageBoxImage.Warning);
             if (allow != MessageBoxResult.Yes) return;
         }
-        var result = await server.PushClipboardAsync(text, manual: true);
+        var target = TargetPhoneId();
+        if (target == null)
+        {
+            DetailText = "请先选择一台手机。";
+            _host.Notify("没有发送", "请先选择一台手机。");
+            return;
+        }
+        var result = await server.PushClipboardToAsync(target, text, manual: true);
         _host.Guard.MarkSent(Hashing.Sha256Hex(text));
-        DetailText = result.Ok ? "文字已发给手机。" : Describe(result.Status);
+        var phoneName = Phones.FirstOrDefault(phone => phone.DeviceId == target)?.Name ?? "手机";
+        DetailText = result.Ok ? "文字已发给「" + phoneName + "」。" : Describe(result.Status);
+        if (!result.Ok) _host.Notify("没有发送", DetailText);
         if (result.Ok && _host.Settings.SaveTextHistory && !SensitiveTextFilter.IsSensitive(text))
-            RememberClipboard("out", text, server.CurrentPeer);
+            RememberClipboard("out", text, new PeerPresence(target, phoneName, true));
     }
 
     [RelayCommand]
@@ -204,6 +224,8 @@ public partial class MainViewModel : ObservableObject
         var answer = MessageBox.Show("解除后，这台手机必须重新配对才能再传文件。", "解除信任", MessageBoxButton.YesNo, MessageBoxImage.Warning);
         if (answer != MessageBoxResult.Yes) return;
         _host.Server?.Revoke(deviceId);
+        if (PhoneSettingsId == deviceId) PhoneSettingsId = "";
+        if (SelectedPhoneId == deviceId) SelectedPhoneId = "";
         ReloadDevices();
     }
 
@@ -291,8 +313,15 @@ public partial class MainViewModel : ObservableObject
                 DetailText = "找不到文件：" + path;
                 continue;
             }
+            var target = TargetPhoneId();
+            if (target == null)
+            {
+                DetailText = "请先选择一台手机。";
+                _host.HoldFiles(paths.Skip(paths.ToList().IndexOf(path)).ToList());
+                return;
+            }
             DetailText = "正在发送 " + Path.GetFileName(path) + " …";
-            var result = await server.OfferFileAsync(path);
+            var result = await server.OfferFileToAsync(target, path);
             DetailText = result.Ok
                 ? "「" + Path.GetFileName(path) + "」已发到手机。"
                 : "「" + Path.GetFileName(path) + "」没有发出：" + Describe(result.Status);
@@ -301,37 +330,32 @@ public partial class MainViewModel : ObservableObject
 
     private void ApplyPeer(PeerPresence presence)
     {
-        if (presence.Online)
-        {
-            IsOnline = true;
-            StatusText = "已连接 · " + presence.Name;
-            DetailText = "可以直接发送文件或剪贴板。";
-            _ = SendQueuedAsync();
-        }
-        else if (_host.Server?.CurrentPeer == null)
-        {
-            IsOnline = false;
-            StatusText = "未连接";
-            DetailText = presence.Name.Length == 0 ? "手机已断开。" : presence.Name + " 已断开。";
-        }
         ReloadDevices();
+        if (presence.Online) _ = SendQueuedAsync();
         OnPropertyChanged(nameof(EmptyHint));
     }
 
     private void ApplyTransfer(TransferNotice notice)
     {
+        var created = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var visible = HistoryLabels.VisibleForPeer(notice.PeerId, SelectedPeerOrNull(), PeerCount());
         var row = Transfers.FirstOrDefault(item => item.Id == notice.Id);
-        if (row == null)
+        if (visible)
         {
-            row = new TransferRow { Id = notice.Id };
-            Transfers.Insert(0, row);
+            if (row == null)
+            {
+                row = new TransferRow { Id = notice.Id };
+                Transfers.Insert(0, row);
+            }
+            FillRow(row, notice, created);
+            while (Transfers.Count > 50) Transfers.RemoveAt(Transfers.Count - 1);
         }
-        row.Title = string.IsNullOrWhiteSpace(notice.Name) ? "未命名" : notice.Name;
-        row.Meta = DirectionLabel(notice.Direction) + " · " + StatusLabel(notice.Status) + " · " + ByteSize.Format(notice.Size);
-        row.LocalPath = notice.LocalPath;
-        row.CanOpen = notice.Kind == "file" && !string.IsNullOrWhiteSpace(notice.LocalPath) && File.Exists(notice.LocalPath);
-        while (Transfers.Count > 50) Transfers.RemoveAt(Transfers.Count - 1);
+        else if (row != null)
+        {
+            Transfers.Remove(row);
+        }
         OnPropertyChanged(nameof(EmptyHint));
+        var title = string.IsNullOrWhiteSpace(notice.Name) ? "未命名" : notice.Name;
         _host.Database.Upsert(new TransferRecord
         {
             Id = notice.Id,
@@ -339,7 +363,7 @@ public partial class MainViewModel : ObservableObject
             Kind = notice.Kind,
             PeerId = notice.PeerId,
             PeerName = notice.PeerName,
-            Name = row.Title,
+            Name = title,
             Size = notice.Size,
             BytesDone = notice.BytesDone,
             Sha256 = notice.Sha256,
@@ -352,8 +376,8 @@ public partial class MainViewModel : ObservableObject
         });
         if (notice.Status == "completed" && notice.Direction == "in")
         {
-            DetailText = "已收到「" + row.Title + "」，保存在下载文件夹，没有打开它。";
-            _host.Notify("文件已收到", row.Title + " 已保存，没有打开。");
+            DetailText = "已收到「" + title + "」，保存在下载文件夹，没有打开它。";
+            _host.Notify("文件已收到", title + " 已保存，没有打开。");
         }
     }
 
@@ -385,32 +409,25 @@ public partial class MainViewModel : ObservableObject
             Status = "completed",
             CreatedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
             FinishedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-            TextPreview = preview
+            TextPreview = text
         };
         _host.Database.Upsert(record);
-        Transfers.Insert(0, new TransferRow
+        if (HistoryLabels.VisibleForPeer(record.PeerId, SelectedPeerOrNull(), PeerCount()))
         {
-            Id = record.Id,
-            Title = preview,
-            Meta = DirectionLabel(direction) + " · 文字 · " + ByteSize.Format(record.Size),
-            CanOpen = false
-        });
-        OnPropertyChanged(nameof(EmptyHint));
+            Transfers.Insert(0, RowFrom(record));
+            OnPropertyChanged(nameof(EmptyHint));
+        }
     }
 
     private void ReloadHistory()
     {
         Transfers.Clear();
-        foreach (var record in _host.Database.Recent(50))
+        var selected = SelectedPeerOrNull();
+        var count = PeerCount();
+        foreach (var record in _host.Database.Recent(80))
         {
-            Transfers.Add(new TransferRow
-            {
-                Id = record.Id,
-                Title = string.IsNullOrWhiteSpace(record.TextPreview) ? record.Name : record.TextPreview,
-                Meta = DirectionLabel(record.Direction) + " · " + (record.Kind == "clipboard" ? "文字" : "文件") + " · " + StatusLabel(record.Status),
-                LocalPath = record.LocalPath,
-                CanOpen = record.Kind == "file" && !string.IsNullOrWhiteSpace(record.LocalPath) && File.Exists(record.LocalPath)
-            });
+            if (!HistoryLabels.VisibleForPeer(record.PeerId, selected, count)) continue;
+            Transfers.Add(RowFrom(record));
         }
         OnPropertyChanged(nameof(EmptyHint));
     }
@@ -427,6 +444,7 @@ public partial class MainViewModel : ObservableObject
                 Title = device.Name + (device.DeviceId == online ? " · 在线" : " · 离线")
             });
         }
+        RefreshPhones();
     }
 
     private string IdleDetail(int port)
@@ -484,7 +502,49 @@ public partial class MainViewModel : ObservableObject
         else dispatcher.Invoke(action);
     }
 
-    private static string DirectionLabel(string direction) => direction is "out" or "to_phone" ? "发出" : "收到";
+    private void FillRow(TransferRow row, TransferNotice notice, long created)
+    {
+        var exists = !string.IsNullOrWhiteSpace(notice.LocalPath) && File.Exists(notice.LocalPath);
+        row.PeerId = notice.PeerId;
+        row.Kind = notice.Kind;
+        row.Title = string.IsNullOrWhiteSpace(notice.Name) ? "未命名" : notice.Name;
+        row.Origin = HistoryLabels.OriginOnPc(notice.Direction);
+        row.When = HistoryLabels.When(created);
+        row.Meta = (notice.Kind == "clipboard" ? "文字" : "文件") + " · " + StatusLabel(notice.Status) + " · " + ByteSize.Format(notice.Size);
+        row.LocalPath = notice.LocalPath;
+        row.CopyText = notice.Kind == "clipboard" ? notice.TextPreview ?? notice.Name : "";
+        row.CanCopy = HistoryLabels.CanCopy(notice.Kind) && !string.IsNullOrWhiteSpace(row.CopyText);
+        row.CanOpen = HistoryLabels.CanOpenFile(notice.Kind, notice.LocalPath, exists);
+    }
+
+    private TransferRow RowFrom(TransferRecord record)
+    {
+        var title = record.Kind == "clipboard"
+            ? Preview(record.TextPreview ?? record.Name)
+            : (string.IsNullOrWhiteSpace(record.Name) ? "未命名" : record.Name);
+        var copy = record.Kind == "clipboard" ? (record.TextPreview ?? record.Name) : "";
+        var exists = !string.IsNullOrWhiteSpace(record.LocalPath) && File.Exists(record.LocalPath);
+        return new TransferRow
+        {
+            Id = record.Id,
+            PeerId = record.PeerId,
+            Kind = record.Kind,
+            Title = title,
+            Origin = HistoryLabels.OriginOnPc(record.Direction),
+            When = HistoryLabels.When(record.CreatedAt),
+            Meta = (record.Kind == "clipboard" ? "文字" : "文件") + " · " + StatusLabel(record.Status),
+            LocalPath = record.LocalPath,
+            CopyText = copy,
+            CanCopy = HistoryLabels.CanCopy(record.Kind) && !string.IsNullOrWhiteSpace(copy),
+            CanOpen = HistoryLabels.CanOpenFile(record.Kind, record.LocalPath, exists)
+        };
+    }
+
+    private static string Preview(string text)
+    {
+        var flat = text.Replace('\n', ' ').Replace('\r', ' ');
+        return flat.Length > 80 ? flat[..80] + "…" : flat;
+    }
 
     private static string StatusLabel(string status) => status switch
     {
@@ -515,9 +575,15 @@ public partial class MainViewModel : ObservableObject
 public partial class TransferRow : ObservableObject
 {
     public string Id { get; set; } = "";
+    public string? PeerId { get; set; }
+    public string Kind { get; set; } = "";
     [ObservableProperty] private string _title = "";
+    [ObservableProperty] private string _origin = "";
+    [ObservableProperty] private string _when = "";
     [ObservableProperty] private string _meta = "";
+    [ObservableProperty] private string _copyText = "";
     [ObservableProperty] private string? _localPath;
+    [ObservableProperty] private bool _canCopy;
     [ObservableProperty] private bool _canOpen;
 }
 

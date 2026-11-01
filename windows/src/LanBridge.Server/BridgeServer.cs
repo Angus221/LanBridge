@@ -47,6 +47,17 @@ public sealed class BridgeServer : IAsyncDisposable
     public PeerPresence? CurrentPeer => _current is { Authenticated: true, DeviceId: { } id }
         ? new PeerPresence(id, _current.Name, true) : null;
 
+    public IReadOnlyList<PeerPresence> ConnectedPeers()
+    {
+        var list = new List<PeerPresence>();
+        foreach (var socket in _sockets.Values)
+        {
+            if (socket is { Authenticated: true, DeviceId: { } id })
+                list.Add(new PeerPresence(id, socket.Name, true));
+        }
+        return list;
+    }
+
     public event EventHandler<ClipboardIncoming>? ClipboardReceived;
     public event EventHandler<TransferNotice>? TransferChanged;
     public event EventHandler<PeerPresence>? PeerPresenceChanged;
@@ -132,9 +143,12 @@ public sealed class BridgeServer : IAsyncDisposable
         Log("revoked " + deviceId);
     }
 
-    public async Task<SendResult> PushClipboardAsync(string text, bool manual, CancellationToken cancellationToken = default)
+    public Task<SendResult> PushClipboardAsync(string text, bool manual, CancellationToken cancellationToken = default)
+        => PushClipboardToAsync(null, text, manual, cancellationToken);
+
+    public async Task<SendResult> PushClipboardToAsync(string? deviceId, string text, bool manual, CancellationToken cancellationToken = default)
     {
-        var peer = _current;
+        var peer = ResolveSendPeer(deviceId);
         if (peer is not { Authenticated: true }) return new SendResult(false, "not_connected", null);
         var normalized = TextNormalizer.Normalize(text);
         if (normalized.Length == 0) return new SendResult(false, "empty", null);
@@ -166,9 +180,12 @@ public sealed class BridgeServer : IAsyncDisposable
         }
     }
 
-    public async Task<SendResult> OfferFileAsync(string path, CancellationToken cancellationToken = default)
+    public Task<SendResult> OfferFileAsync(string path, CancellationToken cancellationToken = default)
+        => OfferFileToAsync(null, path, cancellationToken);
+
+    public async Task<SendResult> OfferFileToAsync(string? deviceId, string path, CancellationToken cancellationToken = default)
     {
-        var peer = _current;
+        var peer = ResolveSendPeer(deviceId);
         if (peer is not { Authenticated: true, DeviceId: { } peerId }) return new SendResult(false, "not_connected", null);
         if (!File.Exists(path)) return new SendResult(false, "missing", null);
         var size = new FileInfo(path).Length;
@@ -1056,6 +1073,16 @@ public sealed class BridgeServer : IAsyncDisposable
 
     private PeerSocket? FindSocket(string? deviceId)
         => deviceId != null && _sockets.TryGetValue(deviceId, out var socket) ? socket : null;
+
+    private PeerSocket? ResolveSendPeer(string? deviceId)
+    {
+        if (!string.IsNullOrWhiteSpace(deviceId))
+        {
+            var found = FindSocket(deviceId);
+            return found is { Authenticated: true } ? found : null;
+        }
+        return _current is { Authenticated: true } ? _current : null;
+    }
 
     private Envelope Hello() => Envelope.Create("hello", new HelloPayload
     {

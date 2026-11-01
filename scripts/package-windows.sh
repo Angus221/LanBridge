@@ -6,7 +6,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="${LANBRIDGE_WIN_OUT:-$ROOT/dist/windows}"
 PUBLISH="$OUT/publish"
-ZIP="$OUT/LanBridge-1.0.1-win-x64.zip"
+ZIP="$OUT/LanBridge-1.0.2-win-x64.zip"
 
 mkdir -p "$PUBLISH"
 rm -rf "$PUBLISH"/*

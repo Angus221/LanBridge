@@ -2,4 +2,5 @@
 <resources>
     <string name="app_name">兰桥</string>
     <string name="send_to_pc">发送到电脑</string>
+    <string name="send_clipboard">发送剪贴板</string>
 </resources>

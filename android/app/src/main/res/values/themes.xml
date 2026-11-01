@@ -1,8 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <style name="Theme.LanBridge" parent="android:Theme.Material.Light.NoActionBar">
-        <item name="android:statusBarColor">#1B3A4B</item>
-        <item name="android:navigationBarColor">#F3EFE6</item>
-        <item name="android:windowBackground">#F3EFE6</item>
+        <item name="android:statusBarColor">#F2F2F7</item>
+        <item name="android:navigationBarColor">#F2F2F7</item>
+        <item name="android:windowBackground">#F2F2F7</item>
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
+    <style name="Theme.LanBridge.Clipboard" parent="android:Theme.Translucent.NoTitleBar">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowAnimationStyle">@null</item>
+        <item name="android:colorBackgroundCacheHint">@null</item>
+        <item name="android:windowNoTitle">true</item>
     </style>
 </resources>

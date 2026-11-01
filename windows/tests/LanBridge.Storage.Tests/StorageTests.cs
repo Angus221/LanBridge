@@ -84,5 +84,14 @@ public class StorageTests
         Assert.Equal("书房电脑", again.DeviceName);
         Assert.True(again.ClipboardSyncEnabled);
         Assert.Equal("/tmp/in", again.IncomingDirectory);
+        Assert.Equal("Ctrl+Alt+V", again.HotkeySend);
+        Assert.Equal("Ctrl+Alt+L", again.HotkeySidebar);
+        again.HotkeySend = "Ctrl+Shift+V";
+        again.SetClipboardEnabled("phone-a", false);
+        store.Save(again);
+        var third = new JsonSettingsStore(path).Load();
+        Assert.Equal("Ctrl+Shift+V", third.HotkeySend);
+        Assert.False(third.ClipboardEnabledFor("phone-a"));
+        Assert.True(third.ClipboardEnabledFor("phone-b"));
     }
 }

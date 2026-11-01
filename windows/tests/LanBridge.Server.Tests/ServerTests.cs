@@ -31,6 +31,35 @@ public class ServerTests
     }
 
     [Fact]
+    public async Task Clipboard_targets_the_requested_phone()
+    {
+        var (server, _, _) = await StartAsync();
+        await using var _ = server;
+        var (key1, id1, ws1) = await PairAsync(server, server.OpenPairing(TimeSpan.FromMinutes(2)), allow: true);
+        using var _key1 = key1;
+        var (key2, id2, ws2) = await PairAsync(server, server.OpenPairing(TimeSpan.FromMinutes(2)), allow: true);
+        using var _key2 = key2;
+        Assert.NotNull(ws1);
+        Assert.NotNull(ws2);
+        Assert.Equal(2, server.ConnectedPeers().Count);
+        Assert.Equal(id2, server.CurrentPeer?.DeviceId);
+
+        var pending = server.PushClipboardToAsync(id1, "only-first", true);
+        var message = await ReadAsync(ws1!);
+        Assert.Equal("clipboard.push", message.Type);
+        Assert.Equal("only-first", message.ReadPayload<ClipboardPushPayload>()!.Text);
+        await SendAsync(ws1!, Envelope.Create("clipboard.ack", new ClipboardAckPayload { RefId = message.MsgId, Ok = true }));
+        var result = await pending;
+        Assert.True(result.Ok);
+        Assert.Equal("sent", result.Status);
+
+        var missed = await server.PushClipboardToAsync("not-a-phone", "nope", true);
+        Assert.False(missed.Ok);
+        Assert.Equal("not_connected", missed.Status);
+        Assert.NotEqual(id1, id2);
+    }
+
+    [Fact]
     public async Task Wrong_pin_is_rejected_and_right_pin_requires_consent()
     {
         var consent = new ScriptedConsent { AllowPair = false };

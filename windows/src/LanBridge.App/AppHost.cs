@@ -161,7 +161,9 @@ public sealed class AppHost : IAsyncDisposable
     {
         var server = Server;
         if (server == null) return;
-        if (!Settings.ClipboardSyncEnabled || Settings.ClipboardPaused) return;
+        if (Settings.ClipboardPaused) return;
+        var anyPhone = Settings.PhoneClipboardSync != null && Settings.PhoneClipboardSync.Values.Any(enabled => enabled);
+        if (!Settings.ClipboardSyncEnabled && !anyPhone) return;
         string text;
         try { text = System.Windows.Clipboard.GetText() ?? ""; }
         catch (Exception) { return; }
@@ -175,9 +177,20 @@ public sealed class AppHost : IAsyncDisposable
             Notify("没有自动发送", "剪贴板里像是密码或密钥。需要的话，打开兰桥后手动发送。");
             return;
         }
-        var result = await server.PushClipboardAsync(text, manual: false).ConfigureAwait(false);
-        if (result.Ok) _guard.MarkSent(hash);
-        Log("auto clipboard " + result.Status);
+        var targets = server.ConnectedPeers().Where(peer => Settings.ClipboardEnabledFor(peer.DeviceId)).ToList();
+        if (targets.Count == 0)
+        {
+            Log("auto clipboard skipped: no phone with sync enabled");
+            return;
+        }
+        var sent = false;
+        foreach (var peer in targets)
+        {
+            var result = await server.PushClipboardToAsync(peer.DeviceId, text, manual: false).ConfigureAwait(false);
+            if (result.Ok) sent = true;
+            Log("auto clipboard " + peer.DeviceId + " " + result.Status);
+        }
+        if (sent) _guard.MarkSent(hash);
     }
 }
 

@@ -2,7 +2,11 @@
 
 兰桥把一台 Windows 电脑和一部 Android 手机（包括能装 APK 的 HarmonyOS）连在同一个 Wi-Fi 上，互传文件和文字。数据不经过云，也不需要账号。
 
-这一版是 V1.0.1。哪些行为来自需求、哪些是规格没写完时定下来的，写在 [DESIGN.md](DESIGN.md)。线上的消息格式在 [docs/protocol.md](docs/protocol.md)。
+这一版是 V1.0.2。哪些行为来自需求、哪些是规格没写完时定下来的，写在 [DESIGN.md](DESIGN.md)。线上的消息格式在 [docs/protocol.md](docs/protocol.md)。
+
+电脑端主界面是停在屏幕右缘的侧栏：鼠标移到右缘中间的拉手会滑出，移开后自动收起，也可以固定。可以配对多部手机，每部手机有自己的连接状态、剪贴板开关和传输记录。默认 `Ctrl+Alt+V` 把当前剪贴板文字发给选中的手机，`Ctrl+Alt+L` 打开或收起侧栏，都可以在设置里改；两个快捷键相同，或已被其他程序占用时，会在侧栏里说明。
+
+手机端默认显示当前电脑和这台电脑自己的记录。底部可以切换已配对的电脑，或再添加一台。通知里有「发送剪贴板」，快捷设置里也有同名开关：点一下会短暂把兰桥带到前台读取剪贴板（所以刚在微信里复制的文字也能发），发出后马上退出。应用里还可以直接选照片或文件。设置齿轮在左上角。
 
 ## 你需要准备
 
@@ -27,7 +31,7 @@ dotnet run --project src\LanBridge.App\LanBridge.App.csproj
 
 可以在设置里改这个文件夹。
 
-关掉窗口之后，兰桥还在任务栏右下角。要退出，右键托盘图标选「退出」。
+关掉侧栏之后，兰桥还在屏幕右缘和任务栏右下角。要退出，右键托盘图标选「退出」。
 
 Windows 第一次运行会尝试添加入站规则：TCP 监听端口（默认 47821）和 UDP 5353（mDNS）。没有管理员权限时，规则加不上，说明会写在 `%LOCALAPPDATA%\LanBridge\firewall.txt`，并在界面里提示一次。请允许当前网络。没有这一步，手机找不到电脑，二维码里的地址也连不上。电脑只从实际的 Wi-Fi 或以太网网卡发 mDNS，不从回环或虚拟网卡发。
 
@@ -98,7 +102,7 @@ Windows 11 x64 自包含单文件（不要求目标电脑另装 .NET）：
 scripts/package-windows.sh
 ```
 
-压缩包在 `dist/windows/LanBridge-1.0.1-win-x64.zip`，里面是 `LanBridge.exe`。脚本可以在装了 .NET 8 SDK 的系统上交叉编译，程序本身要在 Windows 11 x64 上运行。
+压缩包在 `dist/windows/LanBridge-1.0.2-win-x64.zip`，里面是 `LanBridge.exe`。脚本可以在装了 .NET 8 SDK 的系统上交叉编译，程序本身要在 Windows 11 x64 上运行。
 
 Android 正式签名 APK（含 arm64-v8a，可供华为 Mate 60 旁加载安装）：
 
@@ -107,7 +111,7 @@ export ANDROID_HOME="$ANDROID_HOME"
 scripts/package-android.sh
 ```
 
-APK 在 `dist/android/LanBridge-1.0.1.apk`，带 v1、v2、v3 三种签名（没有 v4 的 `.idsig`）。直接跑 `apksigner verify` 时，因为 `minSdk` 是 29，v1 和 v2 会显示成 false；脚本会用 `--min-sdk-version 21` 确认三种都通过。第一次运行会在 `android/.signing/` 生成密钥库和密码文件。这两样都不会进 Git。换一台电脑签名时，把 `LANBRIDGE_KEYSTORE` 和 `LANBRIDGE_KEY_PASSFILE` 指到原来的文件。升级安装必须沿用同一把密钥。
+APK 在 `dist/android/LanBridge-1.0.2.apk`，带 v1、v2、v3 三种签名（没有 v4 的 `.idsig`）。直接跑 `apksigner verify` 时，因为 `minSdk` 是 29，v1 和 v2 会显示成 false；脚本会用 `--min-sdk-version 21` 确认三种都通过。第一次运行会在 `android/.signing/` 生成密钥库和密码文件。这两样都不会进 Git。换一台电脑签名时，把 `LANBRIDGE_KEYSTORE` 和 `LANBRIDGE_KEY_PASSFILE` 指到原来的文件。升级安装必须沿用同一把密钥。
 
 ## 这一版没有做的
 

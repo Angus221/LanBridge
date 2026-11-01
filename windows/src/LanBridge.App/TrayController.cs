@@ -11,13 +11,15 @@ public sealed class TrayController : IDisposable
     private readonly Window _window;
     private readonly AppHost _host;
     private readonly Action _show;
+    private readonly Action _send;
     private readonly NotifyIcon _icon;
 
-    public TrayController(Window window, AppHost host, Action show)
+    public TrayController(Window window, AppHost host, Action show, Action send)
     {
         _window = window;
         _host = host;
         _show = show;
+        _send = send;
         _icon = new NotifyIcon
         {
             Text = "兰桥",
@@ -26,7 +28,7 @@ public sealed class TrayController : IDisposable
         };
         var menu = new ContextMenuStrip();
         menu.Items.Add("打开兰桥", null, (_, _) => _show());
-        menu.Items.Add("发送剪贴板", null, (_, _) => _show());
+        menu.Items.Add("发送剪贴板", null, (_, _) => _send());
         menu.Items.Add("退出", null, (_, _) => Exit());
         _icon.ContextMenuStrip = menu;
         _icon.DoubleClick += (_, _) => _show();

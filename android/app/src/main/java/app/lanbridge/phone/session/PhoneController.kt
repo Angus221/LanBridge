@@ -18,6 +18,7 @@ import app.lanbridge.phone.data.Prefs
 import app.lanbridge.phone.data.TransferEntity
 import app.lanbridge.phone.net.DeviceIdentity
 import app.lanbridge.phone.net.LanMdnsBrowser
+import app.lanbridge.protocol.HistoryUi
 import app.lanbridge.protocol.PairingUi
 import app.lanbridge.protocol.Protocol
 import kotlinx.coroutines.CompletableDeferred
@@ -84,10 +85,13 @@ class PhoneController(private val context: Context, private val notify: (String,
         stopped = false
         scope.launch {
             publishSettings()
+            val peers = db.peers().list()
+            peer = peers.firstOrNull { it.deviceId == prefs.selectedPeerId } ?: peers.firstOrNull()
+            peer?.let { prefs.selectedPeerId = it.deviceId }
+            refreshPeers()
             refreshHistory()
-            peer = db.peers().current()
             if (peer == null) {
-                update { it.copy(status = "未配对", detail = "点「配对电脑」，扫描电脑上的二维码，或在同一 Wi-Fi 下选择发现到的电脑。", online = false) }
+                update { it.copy(status = "未配对", detail = "点底部的「添加电脑」，扫描电脑上的二维码，或在同一 Wi-Fi 下选择发现到的电脑。", online = false) }
             } else {
                 scheduleReconnect(0)
             }
@@ -122,14 +126,50 @@ class PhoneController(private val context: Context, private val notify: (String,
         publishSettings()
     }
 
-    fun forget() {
+    fun selectPeer(deviceId: String) {
         scope.launch {
+            val next = db.peers().get(deviceId) ?: return@launch
+            prefs.selectedPeerId = deviceId
+            if (peer?.deviceId == next.deviceId) {
+                refreshPeers()
+                refreshHistory()
+                return@launch
+            }
             reconnectJob?.cancel()
-            socket?.close(1000, "unlink")
+            val old = socket
+            peer = next
             socket = null
-            peer = null
-            db.peers().clear()
-            update { it.copy(status = "未配对", detail = "已解除这台电脑。需要时重新配对。", online = false, peerName = null, pendingFile = null) }
+            old?.close(1000, "switch")
+            refreshPeers()
+            refreshHistory()
+            scheduleReconnect(0)
+        }
+    }
+
+    fun forget(deviceId: String? = null) {
+        scope.launch {
+            val id = deviceId?.ifBlank { null } ?: peer?.deviceId
+            val droppingCurrent = id == null || id == peer?.deviceId
+            if (droppingCurrent) {
+                reconnectJob?.cancel()
+                val old = socket
+                peer = null
+                socket = null
+                old?.close(1000, "unlink")
+            }
+            if (id == null) db.peers().clear() else db.peers().delete(id)
+            if (prefs.selectedPeerId == id || id == null) prefs.selectedPeerId = null
+            val peers = db.peers().list()
+            val next = peers.firstOrNull { it.deviceId == prefs.selectedPeerId } ?: peers.firstOrNull()
+            if (peer == null) peer = next
+            next?.let { prefs.selectedPeerId = it.deviceId }
+            refreshPeers()
+            refreshHistory()
+            if (peer == null) {
+                update { it.copy(status = "未配对", detail = "已解除。需要时再添加一台电脑。", online = false, peerName = null, pendingFile = null, selectedPeerId = null) }
+            } else if (droppingCurrent) {
+                scheduleReconnect(0)
+            }
         }
     }
 
@@ -440,7 +480,9 @@ class PhoneController(private val context: Context, private val notify: (String,
         )
         db.peers().save(saved)
         peer = saved
-        update { it.copy(status = "已连接 · ${saved.name}", online = true, peerName = saved.name, discovered = emptyList()) }
+        prefs.selectedPeerId = saved.deviceId
+        refreshPeers()
+        update { it.copy(status = "已连接 · ${saved.name}", online = true, peerName = saved.name, discovered = emptyList(), selectedPeerId = saved.deviceId) }
         announceHello()
         return "已和「${saved.name}」配对。之后文件和文字只发给这台电脑。"
     }
@@ -520,10 +562,13 @@ class PhoneController(private val context: Context, private val notify: (String,
                 if (name.isNotBlank()) {
                     peer = peer?.copy(name = name)
                     update { it.copy(peerName = name, status = "已连接 · $name", online = true) }
-                    scope.launch { peer?.let { db.peers().save(it) } }
+                    scope.launch {
+                        peer?.let { db.peers().save(it) }
+                        refreshPeers()
+                    }
                 }
             }
-            "device.revoked" -> scope.launch { forget() }
+            "device.revoked" -> forget(payload.optString("deviceId").ifBlank { null })
             "clipboard.ack" -> ackWaiters.remove(payload.optString("refId"))?.complete(message)
             "clipboard.push" -> scope.launch { incomingText(message.optString("msgId"), payload) }
             "file.accept", "file.reject", "file.pending", "file.complete", "file.error", "file.progress" ->
@@ -554,7 +599,7 @@ class PhoneController(private val context: Context, private val notify: (String,
         send(envelope("clipboard.ack", JSONObject().put("refId", msgId).put("ok", true)))
         notify("收到一段文字", if (sensitive) "已放入剪贴板，不写入历史。" else "已放入剪贴板。")
         update { it.copy(detail = if (sensitive) "收到一段敏感文字，已放入剪贴板，不写入历史。" else "收到一段文字，已放入剪贴板。") }
-        if (prefs.saveHistory && !sensitive) remember("in", "clipboard", previewOf(text), text.toByteArray().size.toLong(), "completed", previewOf(text))
+        if (prefs.saveHistory && !sensitive) remember("in", "clipboard", previewOf(text), text.toByteArray().size.toLong(), "completed", text)
     }
 
     private suspend fun incomingOffer(payload: JSONObject) {
@@ -661,7 +706,7 @@ class PhoneController(private val context: Context, private val notify: (String,
         val ack = withTimeoutOrNull(5_000) { waiter.await() }
         val ok = ack?.optJSONObject("payload")?.optBoolean("ok") == true
         update { it.copy(detail = if (ok) "文字已发到电脑。" else "电脑没有收下这段文字。") }
-        if (ok && prefs.saveHistory && !Protocol.isSensitive(text)) remember("out", "clipboard", previewOf(text), text.toByteArray().size.toLong(), "completed", previewOf(text))
+        if (ok && prefs.saveHistory && !Protocol.isSensitive(text)) remember("out", "clipboard", previewOf(text), text.toByteArray().size.toLong(), "completed", text)
     }
 
     private suspend fun sendFileNow(file: File) {
@@ -778,14 +823,25 @@ class PhoneController(private val context: Context, private val notify: (String,
             size = size,
             status = status,
             createdAt = System.currentTimeMillis(),
-            preview = preview
+            preview = preview,
+            peerId = peer?.deviceId ?: prefs.selectedPeerId
         ))
         refreshHistory()
     }
 
+    private suspend fun refreshPeers() {
+        val peers = db.peers().list()
+        val selected = peers.firstOrNull { it.deviceId == prefs.selectedPeerId } ?: peers.firstOrNull()
+        if (selected != null && prefs.selectedPeerId != selected.deviceId) prefs.selectedPeerId = selected.deviceId
+        if (peer == null || peers.none { it.deviceId == peer?.deviceId }) peer = selected
+        update { it.copy(peers = peers, selectedPeerId = peer?.deviceId ?: selected?.deviceId, peerName = peer?.name) }
+    }
+
     private suspend fun refreshHistory() {
-        val recent = db.transfers().recent()
-        update { it.copy(transfers = recent) }
+        val peers = db.peers().list()
+        val selected = prefs.selectedPeerId
+        val recent = db.transfers().recent().filter { HistoryUi.visible(it.peerId, selected, peers.size) }
+        update { it.copy(transfers = recent, peers = peers, selectedPeerId = selected) }
     }
 
     private fun publishSettings() {
