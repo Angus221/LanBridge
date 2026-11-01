@@ -16,6 +16,7 @@
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.0" />
     <PackageReference Include="QRCoder" Version="1.6.0" />
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <ProjectReference Include="..\LanBridge.Core\LanBridge.Core.csproj" />
     <ProjectReference Include="..\LanBridge.Server\LanBridge.Server.csproj" />
     <ProjectReference Include="..\LanBridge.Storage\LanBridge.Storage.csproj" />

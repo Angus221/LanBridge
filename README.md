@@ -88,6 +88,25 @@ Debug 包在 `android/app/build/outputs/apk/debug/app-debug.apk`。把它拷到�
 
 日志在电脑的 `%LOCALAPPDATA%\LanBridge\lanbridge.log`。
 
+## 打开发布包
+
+Windows 11 x64 自包含单文件（不要求目标电脑另装 .NET）：
+
+```bash
+scripts/package-windows.sh
+```
+
+压缩包在 `dist/windows/LanBridge-1.0.0-win-x64.zip`，里面是 `LanBridge.exe`。脚本可以在装了 .NET 8 SDK 的系统上交叉编译，程序本身要在 Windows 11 x64 上运行。
+
+Android 正式签名 APK（含 arm64-v8a，可供华为 Mate 60 旁加载安装）：
+
+```bash
+export ANDROID_HOME="$ANDROID_HOME"
+scripts/package-android.sh
+```
+
+APK 在 `dist/android/LanBridge-1.0.0.apk`，带 v1、v2、v3 三种签名（没有 v4 的 `.idsig`）。直接跑 `apksigner verify` 时，因为 `minSdk` 是 29，v1 和 v2 会显示成 false；脚本会用 `--min-sdk-version 21` 确认三种都通过。第一次运行会在 `android/.signing/` 生成密钥库和密码文件。这两样都不会进 Git。换一台电脑签名时，把 `LANBRIDGE_KEYSTORE` 和 `LANBRIDGE_KEY_PASSFILE` 指到原来的文件。
+
 ## 这一版没有做的
 
 图片剪贴板、整个文件夹、断点续传的界面、Win11 原生右键菜单。分块上传的接口已经留好，手机上大于 1 MiB 的文件会按块发送，但没有「从上次断开的地方继续」的按钮。

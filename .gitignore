@@ -13,5 +13,10 @@ android/**/*.iml
 *.aab
 uploads/
 *.pfx
+*.jks
+*.keystore
+android/.signing/
+android/keystore.properties
+dist/
 *.log
 .DS_Store
