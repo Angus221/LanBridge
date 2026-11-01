@@ -1,0 +1,17 @@
+bin/
+obj/
+.vs/
+*.user
+*.suo
+TestResults/
+android/.gradle/
+android/**/build/
+android/local.properties
+android/**/*.iml
+.idea/
+*.apk
+*.aab
+uploads/
+*.pfx
+*.log
+.DS_Store

@@ -1,0 +1,354 @@
+{
+  "sha256": [
+    {
+      "input": "",
+      "hex": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "input": "LanBridge",
+      "hex": "1104288a2a9d514d9a0a9e770b4983179b4ccb705a76ff1c59c3afba364ae749"
+    },
+    {
+      "input": "你好\n世界",
+      "hex": "9d4fd5df825a6e1422c2390c63653794766ac7a4fd847ce0e89021de878bf382"
+    },
+    {
+      "input": "test",
+      "hex": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+    }
+  ],
+  "normalize": [
+    {
+      "input": "a\r\nb",
+      "expected": "a\nb"
+    },
+    {
+      "input": "a\rb",
+      "expected": "a\nb"
+    },
+    {
+      "input": "a\r\n\r\nb",
+      "expected": "a\n\nb"
+    },
+    {
+      "input": "a\u0000b",
+      "expected": "ab"
+    },
+    {
+      "input": "保持\n换行",
+      "expected": "保持\n换行"
+    },
+    {
+      "input": "",
+      "expected": ""
+    }
+  ],
+  "sanitize": [
+    {
+      "input": "",
+      "expected": "received.bin"
+    },
+    {
+      "input": "   ",
+      "expected": "received.bin"
+    },
+    {
+      "input": "...",
+      "expected": "received.bin"
+    },
+    {
+      "input": "报告.pdf",
+      "expected": "报告.pdf"
+    },
+    {
+      "input": "a/b/c.txt",
+      "expected": "c.txt"
+    },
+    {
+      "input": "..\\..\\evil.exe",
+      "expected": "evil.exe"
+    },
+    {
+      "input": "CON.txt",
+      "expected": "_CON.txt"
+    },
+    {
+      "input": "aux",
+      "expected": "_aux"
+    },
+    {
+      "input": "com10.txt",
+      "expected": "com10.txt"
+    },
+    {
+      "input": "foo.",
+      "expected": "foo"
+    },
+    {
+      "input": " leading.txt ",
+      "expected": "leading.txt"
+    },
+    {
+      "input": "a<b>.txt",
+      "expected": "ab.txt"
+    },
+    {
+      "input": ".gitignore",
+      "expected": "gitignore"
+    },
+    {
+      "input": "NUL.txt",
+      "expected": "_NUL.txt"
+    },
+    {
+      "input": "LPT9.config",
+      "expected": "_LPT9.config"
+    },
+    {
+      "input": "myCON.txt",
+      "expected": "myCON.txt"
+    },
+    {
+      "input": "CON.tar.gz",
+      "expected": "CON.tar.gz"
+    },
+    {
+      "input": "foo/../../bar.exe",
+      "expected": "bar.exe"
+    },
+    {
+      "input": "foo/",
+      "expected": "foo"
+    },
+    {
+      "input": "a\u0000b.txt",
+      "expected": "ab.txt"
+    },
+    {
+      "input": "‮evil.exe",
+      "expected": "evil.exe"
+    },
+    {
+      "input": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.pdf",
+      "expected": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.pdf"
+    },
+    {
+      "input": "PRN",
+      "expected": "_PRN"
+    },
+    {
+      "input": "file.name.txt",
+      "expected": "file.name.txt"
+    },
+    {
+      "input": "  ..\\..\\Windows\\system.ini",
+      "expected": "system.ini"
+    },
+    {
+      "input": "normal",
+      "expected": "normal"
+    },
+    {
+      "input": "中文 文件 (1).docx",
+      "expected": "中文 文件 (1).docx"
+    },
+    {
+      "input": "COM1",
+      "expected": "_COM1"
+    },
+    {
+      "input": "lpt3.txt",
+      "expected": "_lpt3.txt"
+    },
+    {
+      "input": "<<<>>>",
+      "expected": "received.bin"
+    },
+    {
+      "input": "foo\\bar\\baz.doc",
+      "expected": "baz.doc"
+    }
+  ],
+  "sensitive": [
+    {
+      "input": "-----BEGIN PRIVATE KEY-----\nMIIB",
+      "sensitive": true
+    },
+    {
+      "input": "-----BEGIN RSA PRIVATE KEY-----",
+      "sensitive": true
+    },
+    {
+      "input": "-----BEGIN OPENSSH PRIVATE KEY-----",
+      "sensitive": true
+    },
+    {
+      "input": "-----BEGIN EC PRIVATE KEY-----",
+      "sensitive": true
+    },
+    {
+      "input": "key AKIAIOSFODNN7EXAMPLE here",
+      "sensitive": true
+    },
+    {
+      "input": "sk-abcdefghijklmnopqrstuvwxyz",
+      "sensitive": true
+    },
+    {
+      "input": "ghp_abcdefghijklmnopqrstuvwxyz",
+      "sensitive": true
+    },
+    {
+      "input": "xoxb-1234567890-abcdefghij",
+      "sensitive": true
+    },
+    {
+      "input": "password=hunter2",
+      "sensitive": true
+    },
+    {
+      "input": "密码：abcd",
+      "sensitive": true
+    },
+    {
+      "input": "口令: 12345678",
+      "sensitive": true
+    },
+    {
+      "input": "https://example.com/a?b=1",
+      "sensitive": false
+    },
+    {
+      "input": "明天开会\n地点：3楼",
+      "sensitive": false
+    },
+    {
+      "input": "token=abc",
+      "sensitive": false
+    },
+    {
+      "input": "the password is hunter2",
+      "sensitive": false
+    },
+    {
+      "input": "BEGIN CERTIFICATE",
+      "sensitive": false
+    },
+    {
+      "input": "api_key: abcd1234",
+      "sensitive": true
+    },
+    {
+      "input": "access-key：zzzz",
+      "sensitive": true
+    },
+    {
+      "input": "Secret=abcd",
+      "sensitive": true
+    },
+    {
+      "input": "普通一句中文，没有密钥。",
+      "sensitive": false
+    }
+  ],
+  "ecdsa": {
+    "canonical": "1700000000000\nabcdef0123456789\nPUT\n/v1/files/3f1c9b0a-1111-4222-8333-444455556666\n9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+    "timestampMs": 1700000000000,
+    "nonce": "abcdef0123456789",
+    "method": "PUT",
+    "path": "/v1/files/3f1c9b0a-1111-4222-8333-444455556666",
+    "contentSha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+    "publicKeySpkiBase64": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEjqU3RoAL/6XwGq1SxaNh473H77IvFZFc/KHpDZviPlwAzWF5OwggvO4xkXoy8EGAdYdkN1RgsYA/L5rRA22OYQ==",
+    "signatureDerBase64": "MEUCIQDFVgiKs8G6A7RXI03o1MVKWlTzE7S1zwNocHtT0xbepAIgNlQsVzpmsT2W9XL9tRU2PmHKe7iY+pXfRMoAnvfpa5U="
+  },
+  "receive": [
+    {
+      "name": "a.txt",
+      "size": 10,
+      "free": 100000000,
+      "max": 1000,
+      "auto": true,
+      "active": 0,
+      "action": "accept",
+      "reason": null,
+      "safe": "a.txt"
+    },
+    {
+      "name": "../x",
+      "size": 10,
+      "free": 100000000,
+      "max": 1000,
+      "auto": true,
+      "active": 0,
+      "action": "accept",
+      "reason": null,
+      "safe": "x"
+    },
+    {
+      "name": "CON.txt",
+      "size": 10,
+      "free": 100000000,
+      "max": 1000,
+      "auto": true,
+      "active": 0,
+      "action": "accept",
+      "reason": null,
+      "safe": "_CON.txt"
+    },
+    {
+      "name": "a.txt",
+      "size": 5000,
+      "free": 100000000,
+      "max": 1000,
+      "auto": true,
+      "active": 0,
+      "action": "reject",
+      "reason": "too_large",
+      "safe": "a.txt"
+    },
+    {
+      "name": "a.txt",
+      "size": 100,
+      "free": 1000,
+      "max": 100000,
+      "auto": true,
+      "active": 0,
+      "action": "reject",
+      "reason": "no_space",
+      "safe": "a.txt"
+    },
+    {
+      "name": "a.txt",
+      "size": 10,
+      "free": 100000000,
+      "max": 1000,
+      "auto": false,
+      "active": 0,
+      "action": "confirm",
+      "reason": "needs_confirm",
+      "safe": "a.txt"
+    },
+    {
+      "name": "a.txt",
+      "size": 10,
+      "free": 100000000,
+      "max": 1000,
+      "auto": true,
+      "active": 2,
+      "action": "reject",
+      "reason": "busy",
+      "safe": "a.txt"
+    },
+    {
+      "name": "a.txt",
+      "size": -1,
+      "free": 100000000,
+      "max": 1000,
+      "auto": true,
+      "active": 0,
+      "action": "reject",
+      "reason": "invalid_size",
+      "safe": "a.txt"
+    }
+  ]
+}

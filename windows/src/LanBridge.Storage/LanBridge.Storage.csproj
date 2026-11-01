@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>LanBridge.Storage</RootNamespace>
+    <AssemblyName>LanBridge.Storage</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.10" />
+    <ProjectReference Include="..\LanBridge.Core\LanBridge.Core.csproj" />
+  </ItemGroup>
+</Project>
