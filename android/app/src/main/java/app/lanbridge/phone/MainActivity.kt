@@ -46,15 +46,18 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.lifecycleScope
 import app.lanbridge.phone.qr.QrScanActivity
 import app.lanbridge.phone.service.BridgeService
-import app.lanbridge.phone.session.DiscoveredPc
 import app.lanbridge.phone.session.PhoneState
+import app.lanbridge.protocol.PairingUi
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private val scan = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val payload = result.data?.getStringExtra("payload") ?: return@registerForActivityResult
-        BridgeService.controller?.pairLink(payload)
+        BridgeService.controller?.applyQr(payload)
+    }
+    private val discoverPermissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+        BridgeService.controller?.startDiscovery()
     }
     private val permissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { }
 
@@ -65,6 +68,13 @@ class MainActivity : ComponentActivity() {
         }
         setContent { LanBridgeTheme { HomeScreen(
             onScan = { scan.launch(Intent(this, QrScanActivity::class.java)) },
+            onSearch = {
+                val needed = discoveryPermissions().filter {
+                    checkSelfPermission(it) != android.content.pm.PackageManager.PERMISSION_GRANTED
+                }
+                if (needed.isEmpty()) BridgeService.controller?.startDiscovery()
+                else discoverPermissions.launch(needed.toTypedArray())
+            },
             onSendClipboard = { sendClipboard() }
         ) } }
     }
@@ -86,6 +96,10 @@ class MainActivity : ComponentActivity() {
         if (text.isBlank()) return
         BridgeService.controller?.sendText(text, true)
     }
+
+    private fun discoveryPermissions(): Array<String> =
+        if (Build.VERSION.SDK_INT >= 33) arrayOf(Manifest.permission.NEARBY_WIFI_DEVICES)
+        else arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
 }
 
 private val Ink = Color(0xFF1B3A4B)
@@ -108,7 +122,7 @@ private fun LanBridgeTheme(content: @Composable () -> Unit) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun HomeScreen(onScan: () -> Unit, onSendClipboard: () -> Unit) {
+private fun HomeScreen(onScan: () -> Unit, onSearch: () -> Unit, onSendClipboard: () -> Unit) {
     var controller by remember { mutableStateOf(BridgeService.controller) }
     LaunchedEffect(Unit) {
         while (controller == null) {
@@ -156,7 +170,7 @@ private fun HomeScreen(onScan: () -> Unit, onSendClipboard: () -> Unit) {
                 Button(onClick = onSendClipboard, enabled = state.online) { Text("发送剪贴板") }
                 OutlinedButton(onClick = { showPair = !showPair }, modifier = Modifier.padding(start = 8.dp)) { Text(if (showPair) "收起配对" else "配对电脑") }
             }
-            if (showPair) PairPanel(state, onScan)
+            if (showPair) PairPanel(state, onScan, onSearch)
             Text("最近传输", fontWeight = FontWeight.SemiBold, color = Ink, modifier = Modifier.padding(top = 20.dp, bottom = 8.dp))
             if (state.transfers.isEmpty()) {
                 Text("还没有传输记录。配对之后，可以从分享菜单或这里把文字、文件发到电脑。", color = Color(0xFF5C6B73))
@@ -176,31 +190,67 @@ private fun HomeScreen(onScan: () -> Unit, onSendClipboard: () -> Unit) {
 }
 
 @Composable
-private fun PairPanel(state: PhoneState, onScan: () -> Unit) {
+private fun PairPanel(state: PhoneState, onScan: () -> Unit, onSearch: () -> Unit) {
     val controller = BridgeService.controller ?: return
     var pin by remember { mutableStateOf("") }
+    var manual by remember { mutableStateOf("") }
     var link by remember { mutableStateOf("") }
-    var picked by remember { mutableStateOf<DiscoveredPc?>(state.discovered.firstOrNull()) }
+    LaunchedEffect(state.suggestedPin) {
+        if (state.suggestedPin.length == 6) pin = state.suggestedPin
+    }
+    val manualPending = manual.isNotBlank() && PairingUi.parseManualEndpoint(manual) == null
+    val hasTarget = state.pairTarget != null && !manualPending
+    val reason = if (manualPending) {
+        "请输入完整的局域网 IP，例如 192.168.1.20:47821。没写端口时默认 47821。"
+    } else {
+        PairingUi.blockReason(hasTarget, pin)
+    }
     Column(Modifier.padding(top = 16.dp)) {
         Text("电脑和手机要在同一个 Wi-Fi。配对码 6 位，电脑上还会再问你一次。", color = Color(0xFF5C6B73))
         Button(onClick = onScan, modifier = Modifier.padding(top = 8.dp)) { Text("扫描二维码") }
-        OutlinedButton(onClick = { controller.startDiscovery() }, modifier = Modifier.padding(top = 8.dp)) { Text("搜索同一局域网里的电脑") }
+        OutlinedButton(onClick = onSearch, modifier = Modifier.padding(top = 8.dp)) { Text("搜索同一局域网里的电脑") }
         state.discovered.forEach { pc ->
-            TextButton(onClick = { picked = pc }) {
-                Text((if (picked?.fingerprint == pc.fingerprint) "已选 · " else "") + pc.name + "  " + pc.host)
+            val selected = state.pairTarget?.host == pc.host && state.pairTarget?.port == pc.port && !manualPending
+            TextButton(onClick = {
+                manual = ""
+                controller.chooseDiscovered(pc)
+            }) {
+                Text((if (selected) "已选 · " else "") + pc.name + "  " + pc.host + ":" + pc.port)
             }
         }
-        OutlinedTextField(pin, { pin = it.take(6) }, label = { Text("6 位配对码") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth().padding(top = 8.dp))
+        OutlinedTextField(
+            manual,
+            {
+                manual = it
+                controller.setManualEndpoint(it)
+            },
+            label = { Text("或手动输入 IP:端口") },
+            modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+        )
+        OutlinedTextField(
+            pin,
+            { pin = PairingUi.pinDigits(it).take(6) },
+            label = { Text("6 位配对码") },
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+        )
+        OutlinedTextField(link, { link = it }, label = { Text("或粘贴 lanbridge:// 链接") }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp))
+        TextButton(onClick = { controller.applyQr(link.trim()) }) { Text("使用这个链接里的电脑") }
+        state.pairTarget?.takeIf { !manualPending }?.let { target ->
+            Text("当前目标：${target.name}  ${target.host}:${target.port}", color = Ink, modifier = Modifier.padding(top = 8.dp))
+        }
+        if (reason != null) {
+            Text(reason, color = Amber, modifier = Modifier.padding(top = 8.dp))
+        }
         Button(
             onClick = {
-                val pc = picked ?: return@Button
-                controller.pair(pc.host, pc.port, pc.fingerprint, pin, pc.deviceId)
+                val pc = state.pairTarget ?: return@Button
+                if (!PairingUi.canConnect(true, pin) || manualPending) return@Button
+                controller.pair(pc.host, pc.port, pc.fingerprint, PairingUi.pinDigits(pin), pc.deviceId.ifBlank { null })
             },
-            enabled = pin.length == 6 && picked != null,
+            enabled = reason == null,
             modifier = Modifier.padding(top = 8.dp)
-        ) { Text("用选中的电脑配对") }
-        OutlinedTextField(link, { link = it }, label = { Text("或粘贴 lanbridge:// 链接") }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp))
-        OutlinedButton(onClick = { controller.pairLink(link.trim()) }, modifier = Modifier.padding(top = 8.dp)) { Text("用链接配对") }
+        ) { Text("连接") }
     }
 }
 

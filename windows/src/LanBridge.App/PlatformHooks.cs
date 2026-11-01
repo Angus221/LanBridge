@@ -19,6 +19,9 @@ public static class AppPaths
     public static string DatabasePath => Path.Combine(DataDirectory, "lanbridge.db");
     public static string CertificatePath => Path.Combine(DataDirectory, "identity.pfx.bin");
     public static string LogPath => Path.Combine(DataDirectory, "lanbridge.log");
+    public static string FirewallNotePath => Path.Combine(DataDirectory, "firewall.txt");
+    public static string FirewallOkPath => Path.Combine(DataDirectory, "firewall.ok");
+    public static string FirewallShownPath => Path.Combine(DataDirectory, "firewall.shown");
 
     public static string DefaultIncoming()
     {

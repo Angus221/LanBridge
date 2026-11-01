@@ -10,7 +10,7 @@ SIGN_DIR="${LANBRIDGE_SIGN_DIR:-$ANDROID/.signing}"
 KEYSTORE="${LANBRIDGE_KEYSTORE:-$SIGN_DIR/lanbridge-release.keystore}"
 PASSFILE="${LANBRIDGE_KEY_PASSFILE:-$SIGN_DIR/keystore-pass.txt}"
 ALIAS="${LANBRIDGE_KEY_ALIAS:-lanbridge}"
-APK="$OUT/LanBridge-1.0.0.apk"
+APK="$OUT/LanBridge-1.0.1.apk"
 
 if [[ -z "${ANDROID_HOME:-}" ]]; then
   echo "ANDROID_HOME is not set" >&2

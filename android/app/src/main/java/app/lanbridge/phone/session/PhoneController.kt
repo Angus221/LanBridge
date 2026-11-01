@@ -7,6 +7,8 @@ import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.net.wifi.WifiManager
 import android.os.Environment
+import android.os.Handler
+import android.os.Looper
 import android.os.StatFs
 import android.provider.MediaStore
 import android.util.Base64
@@ -15,6 +17,8 @@ import app.lanbridge.phone.data.PeerEntity
 import app.lanbridge.phone.data.Prefs
 import app.lanbridge.phone.data.TransferEntity
 import app.lanbridge.phone.net.DeviceIdentity
+import app.lanbridge.phone.net.LanMdnsBrowser
+import app.lanbridge.protocol.PairingUi
 import app.lanbridge.protocol.Protocol
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -71,6 +75,10 @@ class PhoneController(private val context: Context, private val notify: (String,
     private var nsd: NsdManager? = null
     private var discovery: NsdManager.DiscoveryListener? = null
     private var multicast: WifiManager.MulticastLock? = null
+    private var wifiLock: WifiManager.WifiLock? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val browser = LanMdnsBrowser(context, ::addFound) { message -> update { it.copy(detail = message) } }
+    private var nsdRetried = false
 
     fun start() {
         stopped = false
@@ -134,63 +142,176 @@ class PhoneController(private val context: Context, private val notify: (String,
 
     fun startDiscovery() {
         stopDiscovery()
-        val manager = context.getSystemService(NsdManager::class.java) ?: return
-        nsd = manager
-        val wifi = context.applicationContext.getSystemService(WifiManager::class.java)
-        multicast = wifi?.createMulticastLock("lanbridge")?.apply {
-            setReferenceCounted(false)
-            acquire()
+        nsdRetried = false
+        val held = holdMulticast()
+        browser.start()
+        val manager = context.getSystemService(NsdManager::class.java)
+        if (manager == null) {
+            update {
+                it.copy(detail = if (held) "系统发现不可用，已改用组播搜索。也可以填写 IP:端口。" else "组播锁没有打开，请填写 IP:端口。")
+            }
+            return
         }
+        nsd = manager
         val listener = object : NsdManager.DiscoveryListener {
             override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) {
-                update { it.copy(detail = "没有开始搜索电脑（$errorCode）。可以改用二维码。") }
+                if (errorCode == NsdManager.FAILURE_ALREADY_ACTIVE && !nsdRetried) {
+                    nsdRetried = true
+                    try { manager.stopServiceDiscovery(this) } catch (_: Exception) {}
+                    mainHandler.postDelayed({
+                        try { manager.discoverServices("${Protocol.SERVICE_TYPE}.", NsdManager.PROTOCOL_DNS_SD, this) }
+                        catch (_: Exception) {}
+                    }, 400)
+                    return
+                }
+                update { it.copy(detail = "系统发现没有开始（$errorCode）。组播搜索仍在进行，也可以填写 IP:端口。") }
             }
             override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) {}
-            override fun onDiscoveryStarted(serviceType: String) {}
+            override fun onDiscoveryStarted(serviceType: String) {
+                update { current ->
+                    if (current.discovered.isNotEmpty()) current
+                    else current.copy(detail = if (held) "正在搜索 _lanbridge._tcp，组播锁已打开。" else "正在搜索，但组播锁没有打开。也可以填写 IP:端口。")
+                }
+            }
             override fun onDiscoveryStopped(serviceType: String) {}
             override fun onServiceLost(serviceInfo: NsdServiceInfo) {}
-            override fun onServiceFound(serviceInfo: NsdServiceInfo) {
-                @Suppress("DEPRECATION")
-                manager.resolveService(serviceInfo, object : NsdManager.ResolveListener {
-                    override fun onResolveFailed(service: NsdServiceInfo, errorCode: Int) {}
-                    override fun onServiceResolved(info: NsdServiceInfo) {
-                        val host = info.host?.hostAddress ?: return
-                        if (host.contains(':')) return
-                        val attributes = info.attributes
-                        fun txt(key: String) = attributes[key]?.toString(Charsets.UTF_8).orEmpty()
-                        val found = DiscoveredPc(
-                            name = txt("name").ifBlank { info.serviceName },
-                            host = host,
-                            port = txt("port").toIntOrNull() ?: info.port,
-                            deviceId = txt("id"),
-                            fingerprint = txt("fp").lowercase()
-                        )
-                        if (found.fingerprint.length != 64) return
-                        update { current ->
-                            val list = (current.discovered.filterNot { it.fingerprint == found.fingerprint } + found).take(8)
-                            current.copy(discovered = list)
-                        }
-                    }
-                })
-            }
+            override fun onServiceFound(serviceInfo: NsdServiceInfo) = resolve(manager, serviceInfo, 0)
         }
         discovery = listener
         try {
             manager.discoverServices("${Protocol.SERVICE_TYPE}.", NsdManager.PROTOCOL_DNS_SD, listener)
         } catch (ex: Exception) {
-            update { it.copy(detail = "搜索电脑失败：" + (ex.message ?: "未知错误")) }
+            update { it.copy(detail = "搜索电脑失败：" + (ex.message ?: "未知错误") + "。可以填写 IP:端口。") }
         }
     }
 
     fun stopDiscovery() {
+        browser.stop()
         val manager = nsd
         val listener = discovery
         if (manager != null && listener != null) {
             try { manager.stopServiceDiscovery(listener) } catch (_: Exception) {}
         }
         discovery = null
-        try { multicast?.release() } catch (_: Exception) {}
+        nsd = null
+        releaseMulticast()
+    }
+
+    fun chooseDiscovered(pc: DiscoveredPc) {
+        update { it.copy(pairTarget = pc, manualError = null, detail = "已选择「${pc.name}」（${pc.host}:${pc.port}）。输入 6 位配对码后点连接。") }
+    }
+
+    fun setManualEndpoint(raw: String) {
+        val parsed = PairingUi.parseManualEndpoint(raw)
+        update { current ->
+            when {
+                parsed != null -> current.copy(
+                    pairTarget = DiscoveredPc("手动输入", parsed.host, parsed.port, "", ""),
+                    manualError = null,
+                    detail = "已选择 ${parsed.host}:${parsed.port}。输入 6 位配对码后点连接。"
+                )
+                raw.isNotBlank() -> current.copy(
+                    pairTarget = current.pairTarget?.takeUnless { it.name == "手动输入" },
+                    manualError = "pending"
+                )
+                current.pairTarget?.name == "手动输入" -> current.copy(
+                    pairTarget = current.discovered.firstOrNull(),
+                    manualError = null
+                )
+                else -> current.copy(manualError = null)
+            }
+        }
+    }
+
+    fun applyQr(raw: String) {
+        val link = Protocol.parsePairLink(raw)
+        if (link == null) {
+            update { it.copy(detail = "这不是兰桥的配对二维码。") }
+            return
+        }
+        if (link.expiresAtUnixSeconds < System.currentTimeMillis() / 1000) {
+            update { it.copy(detail = "二维码已经过期，请在电脑上重新打开配对。") }
+            return
+        }
+        update {
+            it.copy(
+                pairTarget = DiscoveredPc(link.host, link.host, link.port, link.deviceId, link.fingerprint),
+                suggestedPin = link.pin,
+                manualError = null,
+                detail = "已从二维码读到 ${link.host}:${link.port}。核对 6 位配对码后点连接。"
+            )
+        }
+    }
+
+    private fun resolve(manager: NsdManager, serviceInfo: NsdServiceInfo, attempt: Int) {
+        try {
+            @Suppress("DEPRECATION")
+            manager.resolveService(serviceInfo, object : NsdManager.ResolveListener {
+                override fun onResolveFailed(service: NsdServiceInfo, errorCode: Int) {
+                    if (attempt < 3) mainHandler.postDelayed({ resolve(manager, service, attempt + 1) }, 350L * (attempt + 1))
+                }
+                override fun onServiceResolved(info: NsdServiceInfo) = acceptResolved(info)
+            })
+        } catch (_: Exception) {
+            if (attempt < 3) mainHandler.postDelayed({ resolve(manager, serviceInfo, attempt + 1) }, 350L * (attempt + 1))
+        }
+    }
+
+    private fun acceptResolved(info: NsdServiceInfo) {
+        @Suppress("DEPRECATION")
+        val host = info.host?.hostAddress ?: return
+        if (host.contains(':')) return
+        val attributes = info.attributes ?: emptyMap()
+        fun txt(key: String) = attributes[key]?.toString(Charsets.UTF_8).orEmpty()
+        val port = txt("port").toIntOrNull() ?: info.port.takeIf { it > 0 } ?: Protocol.DEFAULT_PORT
+        addFound(DiscoveredPc(txt("name").ifBlank { info.serviceName ?: host }, host, port, txt("id"), txt("fp").lowercase()))
+    }
+
+    private fun addFound(found: DiscoveredPc) {
+        if (found.host.isBlank() || found.port !in 1..65535) return
+        update { current ->
+            val known = current.discovered.any { it.host == found.host && it.port == found.port && it.fingerprint == found.fingerprint }
+            val list = (current.discovered.filterNot {
+                (found.fingerprint.length == 64 && it.fingerprint == found.fingerprint) || (it.host == found.host && it.port == found.port)
+            } + found).take(8)
+            val manual = current.pairTarget?.name == "手动输入"
+            val target = when {
+                manual -> current.pairTarget
+                current.pairTarget == null -> found
+                else -> current.pairTarget
+            }
+            current.copy(
+                discovered = list,
+                pairTarget = target,
+                detail = if (known) current.detail else "发现 ${found.name}（${found.host}:${found.port}）。输入 6 位配对码后点连接。"
+            )
+        }
+    }
+
+    private fun holdMulticast(): Boolean {
+        val wifi = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+        if (wifi == null) return false
+        return try {
+            multicast = wifi.createMulticastLock("lanbridge-discover").apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+            @Suppress("DEPRECATION")
+            wifiLock = wifi.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "lanbridge-wifi").apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+            multicast?.isHeld == true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun releaseMulticast() {
+        try { if (multicast?.isHeld == true) multicast?.release() } catch (_: Exception) {}
         multicast = null
+        try { if (wifiLock?.isHeld == true) wifiLock?.release() } catch (_: Exception) {}
+        wifiLock = null
     }
 
     fun pair(host: String, port: Int, fingerprint: String, pin: String, remoteId: String?) {
@@ -262,7 +383,14 @@ class PhoneController(private val context: Context, private val notify: (String,
     }
 
     private suspend fun doPairAttempt(host: String, port: Int, fingerprint: String, pin: String, remoteId: String?): String {
-        val client = clientFor(fingerprint)
+        var fp = fingerprint.lowercase()
+        var remote = remoteId
+        if (fp.length != 64) {
+            val info = probe(host, port)
+            fp = info.fingerprint
+            if (remote.isNullOrBlank()) remote = info.deviceId.ifBlank { null }
+        }
+        val client = clientFor(fp)
         val waiter = CompletableDeferred<JSONObject>()
         pairWaiter = waiter
         val opened = CompletableDeferred<Unit>()
@@ -303,9 +431,9 @@ class PhoneController(private val context: Context, private val notify: (String,
         if (second.optString("type") != "pair.accept") return rejectText(second)
         val accept = second.optJSONObject("payload") ?: JSONObject()
         val saved = PeerEntity(
-            deviceId = accept.optString("deviceId").ifBlank { remoteId ?: UUID.randomUUID().toString() },
+            deviceId = accept.optString("deviceId").ifBlank { remote ?: UUID.randomUUID().toString() },
             name = accept.optString("deviceName").ifBlank { "电脑" },
-            fingerprint = fingerprint,
+            fingerprint = fp,
             host = host,
             port = port,
             pairedAt = System.currentTimeMillis()
@@ -685,6 +813,33 @@ class PhoneController(private val context: Context, private val notify: (String,
     private fun previewOf(text: String): String {
         val flat = text.replace('\n', ' ')
         return if (flat.length > 80) flat.substring(0, 80) + "…" else flat
+    }
+
+    private fun probe(host: String, port: Int): app.lanbridge.protocol.PcInfo {
+        var certFp = ""
+        val trust = object : X509TrustManager {
+            override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) = Unit
+            override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) {
+                val cert = chain?.firstOrNull() ?: throw CertificateException("empty")
+                certFp = Protocol.sha256Hex(cert.encoded)
+            }
+            override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
+        }
+        val ssl = SSLContext.getInstance("TLS")
+        ssl.init(null, arrayOf<javax.net.ssl.TrustManager>(trust), SecureRandom())
+        val client = OkHttpClient.Builder()
+            .sslSocketFactory(ssl.socketFactory, trust)
+            .hostnameVerifier { _, _ -> true }
+            .connectTimeout(6, TimeUnit.SECONDS)
+            .readTimeout(6, TimeUnit.SECONDS)
+            .build()
+        val body = client.newCall(Request.Builder().url("https://$host:$port/v1/info").build()).execute().use { response ->
+            if (!response.isSuccessful) error("电脑没有回应（${response.code}）")
+            response.body?.string().orEmpty()
+        }
+        val info = PairingUi.parseInfo(body) ?: error("这个地址上不是兰桥")
+        if (!info.fingerprint.equals(certFp, ignoreCase = true)) error("证书和宣告的指纹不一致")
+        return info
     }
 
     private fun clientFor(fingerprint: String): OkHttpClient {

@@ -64,6 +64,8 @@ public partial class MainViewModel : ObservableObject
     {
         for (var i = 0; i < 80 && _host.Server == null && _host.StartError == null; i++)
             await Task.Delay(50);
+        for (var i = 0; i < 40 && !_host.StartupFinished && _host.StartError == null; i++)
+            await Task.Delay(50);
         var server = _host.Server;
         if (server == null)
         {
@@ -84,8 +86,9 @@ public partial class MainViewModel : ObservableObject
         else
         {
             StatusText = "未连接";
-            DetailText = "手机和这台电脑要在同一个 Wi-Fi。点「配对手机」开始。";
+            DetailText = IdleDetail(server.BoundPort);
         }
+        MaybeExplainFirewall();
         _ready = true;
         SendFileCommand.NotifyCanExecuteChanged();
         SendClipboardCommand.NotifyCanExecuteChanged();
@@ -103,14 +106,15 @@ public partial class MainViewModel : ObservableObject
         var host = MdnsAdvertiser.Preferred(MdnsAdvertiser.LocalIpv4());
         if (host == null)
         {
-            PairingHint = "没有找到局域网地址。请确认电脑已连上 Wi-Fi，然后重新配对。";
+            PairingHint = "没有找到可用的局域网网卡（已跳过回环和虚拟网卡）。请确认电脑连的是 Wi-Fi 或网线，而不是只开着虚拟交换机。";
             QrImage = null;
         }
         else
         {
             var exp = server.PairingExpiresAt?.ToUnixTimeSeconds() ?? DateTimeOffset.UtcNow.AddSeconds(ProtocolConstants.PairingTtlSeconds).ToUnixTimeSeconds();
             var link = PairingLink.Build(host.ToString(), server.BoundPort, _host.Settings.DeviceId, server.Fingerprint, pin, exp);
-            PairingHint = "用手机上的兰桥扫描二维码，或在手机上输入这 6 位数字。电脑随后会再问你一次是否允许。";
+            PairingHint = "手机搜索同一 Wi-Fi，或手动输入 " + host + ":" + server.BoundPort
+                + "。服务类型是 _lanbridge._tcp。若搜不到，请允许防火墙放行 TCP " + server.BoundPort + " 和 UDP 5353。电脑随后还会再问一次是否允许。";
             QrImage = RenderQr(link);
         }
         TickPairing();
@@ -423,6 +427,26 @@ public partial class MainViewModel : ObservableObject
                 Title = device.Name + (device.DeviceId == online ? " · 在线" : " · 离线")
             });
         }
+    }
+
+    private string IdleDetail(int port)
+    {
+        var host = MdnsAdvertiser.Preferred(MdnsAdvertiser.LocalIpv4());
+        if (host == null)
+            return "没有找到局域网地址。虚拟网卡和回环不会用来广播。请把电脑连上 Wi-Fi 后再配对。";
+        return "这台电脑的地址是 " + host + ":" + port + "。手机可以搜索，也可以手动输入这个地址。防火墙需要放行 TCP " + port + " 和 UDP 5353。";
+    }
+
+    private void MaybeExplainFirewall()
+    {
+        var note = _host.FirewallNote;
+        if (string.IsNullOrWhiteSpace(note) || FirewallSetup.AlreadyNoted()) return;
+        FirewallSetup.MarkShown();
+        MessageBox.Show(
+            note,
+            "需要放行防火墙",
+            MessageBoxButton.OK,
+            MessageBoxImage.Information);
     }
 
     private void TickPairing()

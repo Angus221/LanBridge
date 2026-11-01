@@ -39,23 +39,57 @@ public static class MdnsCodec
         return "lanbridge-" + compact.ToLowerInvariant();
     }
 
+    public const string ServiceName = "_lanbridge._tcp.local";
+
     public static byte[] BuildAnnouncement(
+        string instanceLabel,
+        int port,
+        string hostLabel,
+        IReadOnlyList<IPAddress> ipv4,
+        IReadOnlyDictionary<string, string> txt) =>
+        Build(0, [], instanceLabel, port, hostLabel, ipv4, txt);
+
+    public static byte[] BuildResponse(
+        byte[] query,
         string instanceLabel,
         int port,
         string hostLabel,
         IReadOnlyList<IPAddress> ipv4,
         IReadOnlyDictionary<string, string> txt)
     {
-        var service = "_lanbridge._tcp.local";
+        var id = query.Length >= 2 ? (ushort)((query[0] << 8) | query[1]) : (ushort)0;
+        return Build(id, ReadQuestions(query), instanceLabel, port, hostLabel, ipv4, txt);
+    }
+
+    private static byte[] Build(
+        ushort id,
+        IReadOnlyList<DnsQuestion> questions,
+        string instanceLabel,
+        int port,
+        string hostLabel,
+        IReadOnlyList<IPAddress> ipv4,
+        IReadOnlyDictionary<string, string> txt)
+    {
+        var service = ServiceName;
         var instance = instanceLabel + "._lanbridge._tcp.local";
         var host = hostLabel + ".local";
+        var enumerate = questions.Any(question =>
+            question.Name.TrimEnd('.').Equals("_services._dns-sd._udp.local", StringComparison.OrdinalIgnoreCase));
         var writer = new Writer();
-        writer.U16(0);
+        writer.U16(id);
         writer.U16(0x8400);
+        writer.U16((ushort)questions.Count);
+        writer.U16((ushort)(3 + ipv4.Count + (enumerate ? 1 : 0)));
         writer.U16(0);
-        writer.U16((ushort)(3 + ipv4.Count));
         writer.U16(0);
-        writer.U16(0);
+        foreach (var question in questions)
+        {
+            writer.Name(question.Name);
+            writer.U16(question.Type);
+            writer.U16(question.Unicast ? (ushort)0x8001 : (ushort)1);
+        }
+        if (enumerate)
+            WritePtr(writer, "_services._dns-sd._udp.local", service, 120, flush: false);
         WritePtr(writer, service, instance, 120, flush: false);
         WriteSrv(writer, instance, host, port, 120);
         WriteTxt(writer, instance, txt, 120);

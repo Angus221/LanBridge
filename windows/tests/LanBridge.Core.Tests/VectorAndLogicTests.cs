@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.NetworkInformation;
 using System.Security.Cryptography;
 using System.Text.Json;
 using Xunit;
@@ -259,11 +260,55 @@ public class VectorAndLogicTests
         Assert.True(MdnsCodec.MatchesServiceQuery(questions, "StudyPC", "lanbridge-111111111111"));
     }
 
-    private static byte[] BuildPtrQuery(string name)
+    [Fact]
+    public void Mdns_response_echoes_the_query_and_advertises_only_the_given_address()
+    {
+        var query = BuildPtrQuery("_lanbridge._tcp.local", 0x1234);
+        var txt = new Dictionary<string, string> { ["fp"] = "ab", ["port"] = "47821", ["role"] = "pc" };
+        var packet = MdnsCodec.BuildResponse(query, "StudyPC", 47821, "lanbridge-111111111111", new[] { IPAddress.Parse("192.168.1.20") }, txt);
+        Assert.False(MdnsCodec.IsQuery(packet));
+        Assert.Equal(0x12, packet[0]);
+        Assert.Equal(0x34, packet[1]);
+        var answers = MdnsCodec.ReadAnswers(packet);
+        Assert.Contains(answers, record => record.Type == MdnsCodec.TypePtr && record.Name == "_lanbridge._tcp.local");
+        var address = Assert.Single(answers, record => record.Type == MdnsCodec.TypeA);
+        Assert.Equal(new byte[] { 192, 168, 1, 20 }, address.Rdata);
+        Assert.Equal(47821, (answers.Single(record => record.Type == MdnsCodec.TypeSrv).Rdata[4] << 8) | answers.Single(record => record.Type == MdnsCodec.TypeSrv).Rdata[5]);
+    }
+
+    [Fact]
+    public void Lan_nic_skips_loopback_and_virtual_adapters()
+    {
+        var choices = new[]
+        {
+            new LanNicChoice(IPAddress.Loopback, "Loopback", "Loopback Pseudo-Interface", NetworkInterfaceType.Loopback, false),
+            new LanNicChoice(IPAddress.Parse("172.22.160.1"), "vEthernet (WSL)", "Hyper-V Virtual Ethernet Adapter", NetworkInterfaceType.Ethernet, false),
+            new LanNicChoice(IPAddress.Parse("192.168.56.1"), "VMware Network Adapter VMnet1", "VMware Virtual Ethernet Adapter for VMnet1", NetworkInterfaceType.Ethernet, false),
+            new LanNicChoice(IPAddress.Parse("10.0.0.8"), "Wi-Fi", "Intel Wireless-AC", NetworkInterfaceType.Wireless80211, true)
+        };
+        var chosen = LanNic.Select(choices);
+        Assert.NotNull(chosen);
+        Assert.Equal("10.0.0.8", chosen.Address.ToString());
+        Assert.Null(LanNic.Select(Array.Empty<LanNicChoice>()));
+    }
+
+    [Fact]
+    public void Firewall_rules_cover_the_app_port_and_mdns()
+    {
+        var explain = FirewallRules.Explain(47821, @"C:\LanBridge\LanBridge.exe");
+        Assert.Contains("47821", explain, StringComparison.Ordinal);
+        Assert.Contains("5353", explain, StringComparison.Ordinal);
+        Assert.Contains("UDP", explain, StringComparison.Ordinal);
+        var add = FirewallRules.AddArguments(47821, @"C:\LanBridge\LanBridge.exe");
+        Assert.Contains(add, line => line.Contains("protocol=TCP", StringComparison.Ordinal) && line.Contains("localport=47821", StringComparison.Ordinal));
+        Assert.Contains(add, line => line.Contains("protocol=UDP", StringComparison.Ordinal) && line.Contains("localport=5353", StringComparison.Ordinal));
+    }
+
+    private static byte[] BuildPtrQuery(string name, ushort id = 0)
     {
         var ms = new MemoryStream();
         void U16(ushort v) { ms.WriteByte((byte)(v >> 8)); ms.WriteByte((byte)v); }
-        U16(0);
+        U16(id);
         U16(0);
         U16(1);
         U16(0);

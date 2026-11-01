@@ -1,5 +1,4 @@
 using System.Net;
-using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using LanBridge.Core;
 
@@ -13,6 +12,7 @@ public sealed class MdnsAdvertiser : IDisposable
     private readonly Action<string> _log;
     private readonly CancellationTokenSource _cts = new();
     private Socket? _socket;
+    private IPAddress? _lan;
 
     public MdnsAdvertiser(Func<(string DeviceId, string DeviceName, int Port, string Fingerprint)> identity, Action<string> log)
     {
@@ -25,8 +25,9 @@ public sealed class MdnsAdvertiser : IDisposable
     public void Announce()
     {
         var socket = _socket;
-        if (socket == null) return;
-        try { Send(socket, new IPEndPoint(Group, Port)); }
+        var lan = _lan;
+        if (socket == null || lan == null) return;
+        try { Send(socket, new IPEndPoint(Group, Port), null); }
         catch (Exception ex) { _log("mdns send: " + ex.Message); }
     }
 
@@ -38,72 +39,100 @@ public sealed class MdnsAdvertiser : IDisposable
 
     public static IReadOnlyList<IPAddress> LocalIpv4()
     {
-        var list = new List<IPAddress>();
-        foreach (var nic in NetworkInterface.GetAllNetworkInterfaces())
-        {
-            if (nic.OperationalStatus != OperationalStatus.Up) continue;
-            if (nic.NetworkInterfaceType == NetworkInterfaceType.Loopback) continue;
-            foreach (var unicast in nic.GetIPProperties().UnicastAddresses)
-            {
-                var address = unicast.Address;
-                if (address.AddressFamily != AddressFamily.InterNetwork) continue;
-                if (IPAddress.IsLoopback(address)) continue;
-                if (!LanAddress.IsPrivateLan(address)) continue;
-                list.Add(address);
-            }
-        }
-        return list;
+        var chosen = LanNic.Select(LanNic.Scan());
+        return chosen == null ? [] : [chosen.Address];
     }
 
-    public static IPAddress? Preferred(IReadOnlyList<IPAddress> addresses)
-    {
-        static int Rank(IPAddress address)
-        {
-            var b = address.GetAddressBytes();
-            if (b[0] == 192 && b[1] == 168) return 0;
-            if (b[0] == 10) return 1;
-            if (b[0] == 172) return 2;
-            return 3;
-        }
-        return addresses.OrderBy(Rank).ThenBy(address => address.ToString()).FirstOrDefault();
-    }
+    public static IPAddress? Preferred(IReadOnlyList<IPAddress> addresses) => addresses.FirstOrDefault();
 
     private void Loop()
     {
+        Socket? socket = null;
         try
         {
-            var socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
-            socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
-            socket.Bind(new IPEndPoint(IPAddress.Any, Port));
-            foreach (var address in LocalIpv4())
+            var choice = LanNic.Select(LanNic.Scan());
+            if (choice == null)
             {
-                try { socket.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.AddMembership, new MulticastOption(Group, address)); }
-                catch (Exception ex) { _log("mdns join " + address + ": " + ex.Message); }
+                _log("mdns: no physical lan interface");
+                return;
             }
-            try { socket.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.MulticastTimeToLive, 255); }
-            catch (Exception) { }
+            _lan = choice.Address;
+            _log("mdns: interface " + choice.Name + " " + choice.Address + " gateway=" + choice.HasGateway);
+            socket = Bind(choice.Address);
             _socket = socket;
-            Send(socket, new IPEndPoint(Group, Port));
-            var buffer = new byte[2048];
-            var last = DateTime.UtcNow;
+            var fastUntil = DateTime.UtcNow.AddSeconds(45);
+            var last = DateTime.MinValue;
+            var buffer = new byte[4096];
             while (!_cts.IsCancellationRequested)
             {
-                if (socket.Poll(1_000_000, SelectMode.SelectRead) && socket.Available > 0)
-                {
-                    EndPoint remote = new IPEndPoint(IPAddress.Any, 0);
-                    int length;
-                    try { length = socket.ReceiveFrom(buffer, ref remote); }
-                    catch (SocketException) { continue; }
-                    if (length > 0) Handle(socket, buffer.AsSpan(0, length).ToArray(), remote);
-                }
-                if (DateTime.UtcNow - last > TimeSpan.FromSeconds(20))
+                var interval = DateTime.UtcNow < fastUntil ? TimeSpan.FromSeconds(3) : TimeSpan.FromSeconds(15);
+                if (DateTime.UtcNow - last >= interval)
                 {
                     last = DateTime.UtcNow;
-                    Send(socket, new IPEndPoint(Group, Port));
+                    try { Send(socket, new IPEndPoint(Group, Port), null); }
+                    catch (Exception ex) { _log("mdns send: " + ex.Message); }
                 }
+                if (!socket.Poll(500_000, SelectMode.SelectRead) || socket.Available <= 0) continue;
+                EndPoint remote = new IPEndPoint(IPAddress.Any, 0);
+                int length;
+                try { length = socket.ReceiveFrom(buffer, ref remote); }
+                catch (SocketException) { continue; }
+                if (length > 0) Handle(socket, buffer.AsSpan(0, length).ToArray(), remote);
             }
         }
         catch (Exception ex) { _log("mdns stopped: " + ex.Message); }
+        finally
+        {
+            try { socket?.Dispose(); } catch (Exception) { }
+        }
+    }
+
+    private Socket Bind(IPAddress lan)
+    {
+        Exception? last = null;
+        foreach (var endpoint in new IPEndPoint[] { new(lan, Port), new(IPAddress.Any, Port) })
+        {
+            var socket = Open(lan);
+            try
+            {
+                socket.Bind(endpoint);
+                try
+                {
+                    socket.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.AddMembership, new MulticastOption(Group, lan));
+                }
+                catch (Exception ex) { _log("mdns join " + lan + ": " + ex.Message); }
+                _log("mdns bound " + socket.LocalEndPoint);
+                return socket;
+            }
+            catch (Exception ex)
+            {
+                last = ex;
+                _log("mdns bind " + endpoint + " failed: " + ex.Message);
+                socket.Dispose();
+            }
+        }
+        var sendOnly = Open(lan);
+        sendOnly.Bind(new IPEndPoint(lan, 0));
+        _log("mdns send-only " + sendOnly.LocalEndPoint + " (5353 busy: " + last?.Message + ")");
+        return sendOnly;
+    }
+
+    private static Socket Open(IPAddress lan)
+    {
+        var socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+        socket.ExclusiveAddressUse = false;
+        socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+        try { socket.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.MulticastTimeToLive, 255); }
+        catch (Exception) { }
+        SetMulticastInterface(socket, lan);
+        return socket;
+    }
+
+    private static void SetMulticastInterface(Socket socket, IPAddress address)
+    {
+        // IPv4 IP_MULTICAST_IF wants the address bytes. BitConverter layout matches that on little-endian Windows.
+        var option = BitConverter.ToInt32(address.GetAddressBytes(), 0);
+        socket.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.MulticastInterface, option);
     }
 
     private void Handle(Socket socket, byte[] packet, EndPoint remote)
@@ -116,17 +145,18 @@ public sealed class MdnsAdvertiser : IDisposable
             var host = MdnsCodec.HostLabel(identity.DeviceId);
             var questions = MdnsCodec.ReadQuestions(packet);
             if (!MdnsCodec.MatchesServiceQuery(questions, instance, host)) return;
-            var unicast = questions.Any(question => question.Unicast);
-            Send(socket, unicast ? remote : new IPEndPoint(Group, Port));
+            if (questions.Any(question => question.Unicast))
+                Send(socket, remote, packet);
+            Send(socket, new IPEndPoint(Group, Port), packet);
         }
         catch (Exception ex) { _log("mdns query: " + ex.Message); }
     }
 
-    private void Send(Socket socket, EndPoint destination)
+    private void Send(Socket socket, EndPoint destination, byte[]? query)
     {
+        var lan = _lan;
+        if (lan == null) return;
         var identity = _identity();
-        var addresses = LocalIpv4();
-        if (addresses.Count == 0) return;
         var name = identity.DeviceName;
         if (name.Length > 40) name = name[..40];
         var txt = new Dictionary<string, string>
@@ -138,12 +168,11 @@ public sealed class MdnsAdvertiser : IDisposable
             ["role"] = "pc",
             ["port"] = identity.Port.ToString()
         };
-        var packet = MdnsCodec.BuildAnnouncement(
-            MdnsCodec.InstanceLabel(identity.DeviceName, identity.DeviceId),
-            identity.Port,
-            MdnsCodec.HostLabel(identity.DeviceId),
-            addresses,
-            txt);
+        var instance = MdnsCodec.InstanceLabel(identity.DeviceName, identity.DeviceId);
+        var host = MdnsCodec.HostLabel(identity.DeviceId);
+        var packet = query == null
+            ? MdnsCodec.BuildAnnouncement(instance, identity.Port, host, [lan], txt)
+            : MdnsCodec.BuildResponse(query, instance, identity.Port, host, [lan], txt);
         socket.SendTo(packet, destination);
     }
 }

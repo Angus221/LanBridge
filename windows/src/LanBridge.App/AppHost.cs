@@ -38,6 +38,8 @@ public sealed class AppHost : IAsyncDisposable
     public BridgeServer? Server { get; private set; }
     public ClipboardGuard Guard => _guard;
     public string? StartError { get; private set; }
+    public string FirewallNote { get; private set; } = "";
+    public bool StartupFinished { get; private set; }
     public bool ExitRequested => _exit;
     public event Action<IReadOnlyList<string>>? FilesReady;
     public event Action<string, string>? Notification;
@@ -113,6 +115,8 @@ public sealed class AppHost : IAsyncDisposable
             Server = server;
             await server.StartAsync().ConfigureAwait(false);
             Log("listening " + server.BoundPort + " fp " + server.Fingerprint);
+            try { FirewallNote = FirewallSetup.Ensure(server.BoundPort, Environment.ProcessPath, Log); }
+            catch (Exception ex) { Log("firewall: " + ex.Message); }
             _mdns = new MdnsAdvertiser(
                 () => (Settings.DeviceId, Settings.DeviceName, server.BoundPort, server.Fingerprint),
                 Log);
@@ -136,10 +140,12 @@ public sealed class AppHost : IAsyncDisposable
             catch (Exception ex) { Log("sendto: " + ex.Message); }
             try { StartupRegistration.Apply(Settings.RunAtStartup); }
             catch (Exception ex) { Log("startup: " + ex.Message); }
+            StartupFinished = true;
         }
         catch (Exception ex)
         {
             StartError = ex.Message;
+            StartupFinished = true;
             Log("start failed: " + ex);
         }
     }
